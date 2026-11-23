@@ -9,6 +9,7 @@ Setup:
 Run the checks (no network or API key needed, everything is mocked):
     python weather_mood.py
 """
+
 import json
 import os
 from unittest.mock import MagicMock, patch
@@ -28,6 +29,7 @@ GEMINI_URL = (
 
 MOODS = ["warming", "cooling", "comforting", "refreshing", "light", "hearty"]
 
+# Open-Meteo uses numbers for weather conditions, so this dictionary matches those numbers to descriptions we can use
 WMO_CODES = {
     0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
     45: "foggy", 48: "foggy",
@@ -41,7 +43,6 @@ WMO_CODES = {
     95: "stormy", 96: "stormy", 99: "stormy",
 }
 
-# Every key get_current_weather() must return, even when Open-Meteo omits data.
 WEATHER_KEYS = [
     "temperature_f", "feels_like_f", "humidity_pct", "precipitation_in",
     "cloud_cover_pct", "wind_mph", "is_day", "weather_code",
@@ -52,6 +53,8 @@ WEATHER_KEYS = [
 # ---------------------------------------------------------------------------
 # Weather (Open-Meteo), hardened so all keys always exist
 # ---------------------------------------------------------------------------
+
+# sorting temperatures into categories that can help us decide what kind of food might fit the weather
 def temperature_band(temp_f):
     if temp_f is None:
         return None
@@ -69,6 +72,8 @@ def temperature_band(temp_f):
 def get_current_weather(latitude: float, longitude: float) -> dict:
     """Fetch current weather. Always returns every key in WEATHER_KEYS
     (value is None when Open-Meteo didn't supply it)."""
+
+    # requesting the current weather based on the user's coordinates and setting the units to Fahrenheit, mph, and inches
     params = {
         "latitude": latitude,
         "longitude": longitude,
@@ -85,6 +90,7 @@ def get_current_weather(latitude: float, longitude: float) -> dict:
     resp.raise_for_status()
     cur = resp.json().get("current") or {}
 
+    # getting the weather data and turning the weather code into a description, like rainy or snowy
     code = cur.get("weather_code")
     condition = WMO_CODES.get(code) if code is not None else None
     temp = cur.get("temperature_2m")
@@ -94,6 +100,7 @@ def get_current_weather(latitude: float, longitude: float) -> dict:
     parts = [p for p in (band, condition) if p]
     is_day = cur.get("is_day")
 
+    # returning everything in a dictionary, using .get() so missing weather values won't cause an error
     return {
         "temperature_f": temp,
         "feels_like_f": feels,
@@ -113,10 +120,12 @@ def get_current_weather(latitude: float, longitude: float) -> dict:
 # ---------------------------------------------------------------------------
 # Prompt builder: skips any field that is None
 # ---------------------------------------------------------------------------
+
 def build_mood_prompt(weather: dict) -> str:
     """Build the text prompt. Lines for missing (None) values are left out."""
     lines = []
 
+    # adding weather details to our prompt, but only if the value exists so Gemini doesn't receive a bunch of missing information
     def add(label, value, fmt="{}"):
         if value is not None:
             lines.append(f"- {label}: {fmt.format(value)}")
@@ -131,6 +140,7 @@ def build_mood_prompt(weather: dict) -> str:
     if weather.get("is_day") is not None:
         lines.append(f"- Time of day: {'daytime' if weather['is_day'] else 'nighttime'}")
 
+    # putting the weather information together and asking Gemini to choose a food mood and recipe search keywords
     return (
         "Here is the current weather for the user's location:\n"
         + "\n".join(lines)
@@ -143,6 +153,8 @@ def build_mood_prompt(weather: dict) -> str:
 # ---------------------------------------------------------------------------
 # Gemini call (the actual step 2 request)
 # ---------------------------------------------------------------------------
+
+# giving Gemini some rules for how to match different weather conditions to the types of meals someone might want
 SYSTEM_PROMPT = (
     "You match weather to meals. Respond only with JSON that follows the schema. "
     "Cold or snowy weather suggests warming or hearty meals; hot weather suggests "
@@ -163,10 +175,13 @@ RESPONSE_SCHEMA = {
 
 def map_weather_to_mood(weather: dict) -> dict:
     """POST to Gemini and return {"mood", "keywords", "reason"}."""
+
+    # getting the API key from our environment instead of putting it directly in the code
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("Set the GEMINI_API_KEY environment variable.")
 
+    # setting up what we want to send Gemini, including our weather prompt and the format we want its response to follow
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": [{"text": build_mood_prompt(weather)}]}],
@@ -184,6 +199,7 @@ def map_weather_to_mood(weather: dict) -> dict:
     )
     resp.raise_for_status()
 
+    # turning Gemini's response into a dictionary and making sure the mood it chose is one of the options we defined
     text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
     result = json.loads(text)
     if result.get("mood") not in MOODS:
@@ -199,8 +215,11 @@ def get_recipe_mood(weather: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
+
 def check_missing_keys():
     """Weather function returns every key, even when Open-Meteo omits fields."""
+
+    # testing different fake weather responses to see if our function still works when some or all of the information is missing
     scenarios = {
         "full": {"current": {
             "temperature_2m": 41.0, "apparent_temperature": 37.0,
@@ -215,6 +234,8 @@ def check_missing_keys():
         fake = MagicMock()
         fake.raise_for_status.return_value = None
         fake.json.return_value = body
+
+        # using a fake API response instead of making a real request, then checking if any of our expected keys are missing
         with patch("requests.get", return_value=fake):
             result = get_current_weather(37.83191, -122.21592)
         missing = [k for k in WEATHER_KEYS if k not in result]
@@ -226,6 +247,8 @@ def check_missing_keys():
 
 def check_none_values():
     """Prompt builder skips humidity=None but keeps the other lines."""
+
+    # making up some weather data with a missing humidity value to see if our prompt can handle it
     weather = {
         "temperature_f": 28, "feels_like_f": 19, "humidity_pct": None,
         "precipitation_in": 0.1, "cloud_cover_pct": 90, "wind_mph": 12,
@@ -236,6 +259,7 @@ def check_none_values():
     prompt = build_mood_prompt(weather)
     print("\n--- generated prompt ---\n" + prompt + "\n------------------------")
 
+    # checking that the missing humidity is left out but the other weather information is still included in the prompt
     results = {
         'no "None" anywhere': "None" not in prompt,
         "no humidity line": "humidity" not in prompt.lower(),
@@ -248,16 +272,11 @@ def check_none_values():
 
 
 if __name__ == "__main__":
+    # running both checks and printing whether everything passed
     a = check_missing_keys()
     b = check_none_values()
     print("\nALL CHECKS PASSED" if a and b else "\nSOME CHECKS FAILED")
+
     # Live usage once your key is set:
     #   w = get_current_weather(37.83191, -122.21592)
     #   print(get_recipe_mood(w))
-
-"""
-PASS no "None" anywhere
-PASS no humidity line
-PASS has temperature line
-PASS has wind line
-"""

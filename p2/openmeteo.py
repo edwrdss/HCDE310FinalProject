@@ -5,7 +5,7 @@ import requests
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 ZIP_URL = "https://api.zippopotam.us/us/{zip_code}"  # free, no API key
 
-# WMO weather codes used by Open-Meteo
+# WMO weather codes used by Open-Meteo: these numbers represent different weather conditions, so we're matching them to descriptions that are easier to understand
 WMO_CODES = {
     0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
     45: "foggy", 48: "foggy",
@@ -22,6 +22,8 @@ WMO_CODES = {
 
 def zip_to_coordinates(zip_code: str) -> tuple[float, float]:
     """Convert a US ZIP code to (latitude, longitude)."""
+
+    # using the ZIP code API to find the coordinates for the user's location and raising an error if the ZIP code doesn't exist
     resp = requests.get(ZIP_URL.format(zip_code=zip_code), timeout=10)
     if resp.status_code == 404:
         raise ValueError(f"Unknown ZIP code: {zip_code}")
@@ -30,6 +32,7 @@ def zip_to_coordinates(zip_code: str) -> tuple[float, float]:
     return float(place["latitude"]), float(place["longitude"])
 
 
+# sorting the temperature into categories so we can later use them to help decide what kind of food fits the weather
 def temperature_band(temp_f: float) -> str:
     if temp_f <= 32:
         return "freezing"
@@ -44,6 +47,8 @@ def temperature_band(temp_f: float) -> str:
 
 def get_current_weather(latitude: float, longitude: float) -> dict:
     """Fetch current weather from Open-Meteo, in US units."""
+
+    # setting up the weather information we want from Open-Meteo and making sure the units are in Fahrenheit, mph, and inches
     params = {
         "latitude": latitude,
         "longitude": longitude,
@@ -66,9 +71,11 @@ def get_current_weather(latitude: float, longitude: float) -> dict:
     resp.raise_for_status()
     cur = resp.json()["current"]
 
+    # getting the weather condition and temperature category from the information returned by the API
     condition = WMO_CODES.get(cur["weather_code"], "unknown")
     band = temperature_band(cur["apparent_temperature"])
 
+    # putting all the weather information into one dictionary that we can use later when matching the weather to recipes
     return {
         "temperature_f": cur["temperature_2m"],
         "feels_like_f": cur["apparent_temperature"],
@@ -87,11 +94,15 @@ def get_current_weather(latitude: float, longitude: float) -> dict:
 
 def get_weather_for_zip(zip_code: str) -> dict:
     """Step 1 of the flow: ZIP -> coordinates -> weather."""
+
+    # connecting the two functions so someone can enter a ZIP code instead of having to know their exact coordinates
     lat, lon = zip_to_coordinates(zip_code)
     return get_current_weather(lat, lon)
 
 
 if __name__ == "__main__":
+
+    # checking the weather for Oakland and Seattle to see if we're getting the expected weather information
     # Check 1: Oakland, CA (looking for cloudy)
     oakland = get_current_weather(37.83191, -122.21592)
     print("Oakland:", oakland["summary"], "| cloud cover:", oakland["cloud_cover_pct"], "%")

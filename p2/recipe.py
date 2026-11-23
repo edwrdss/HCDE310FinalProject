@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
+# these are the main settings for our recipe searches, including how many recipes we want
 RECIPEAPI_URL = "https://recipeapi.io/api/v1/recipes"
 DEFAULT_KEYWORD = "soup"
 RECIPE_COUNT = 4
@@ -36,6 +37,7 @@ class RecipeAPIError(Exception):
 # ---------------------------------------------------------------------------
 # The call
 # ---------------------------------------------------------------------------
+# checking whether the API gave us a specific error code
 def _error_code(resp) -> str | None:
     try:
         return resp.json().get("error", {}).get("code")
@@ -48,6 +50,7 @@ def _request(keyword: str, per_page: int):
     key = os.environ.get("RECIPEAPI_KEY")
     if not key:
         raise RecipeAPIError("RECIPEAPI_KEY is not set. Get a free key at https://recipeapi.io/register")
+    # trying the request again once if we hit the API rate limit
     for attempt in range(2):
         resp = requests.get(
             RECIPEAPI_URL,
@@ -62,6 +65,7 @@ def _request(keyword: str, per_page: int):
     return resp
 
 
+# cleaning up ingredient quantities so whole numbers show without .0
 def _fmt_qty(q) -> str:
     if q is None:
         return ""
@@ -72,6 +76,7 @@ def _fmt_qty(q) -> str:
 
 def _normalize(recipe: dict) -> dict:
     """Keep what the UI needs. Ingredients become display strings like '2 clove Garlic'."""
+    # turning the ingredient information into text that would be easier to display in the app
     ingredients = []
     for ing in recipe.get("ingredients") or []:
         if not isinstance(ing, dict) or not ing.get("name"):
@@ -98,6 +103,7 @@ def _normalize(recipe: dict) -> dict:
     }
 
 
+# searching by a keyword and handling errors so the app can keep going if a search fails
 def search_recipes(keyword: str, per_page: int = RECIPE_COUNT) -> list[dict]:
     """Search RecipeAPI by recipe name. Returns [] for no results or a network
     problem, so the caller can simply move on to the next keyword.
@@ -118,6 +124,7 @@ def search_recipes(keyword: str, per_page: int = RECIPE_COUNT) -> list[dict]:
         return []
     if not isinstance(data, list):
         return []
+    # only keeping recipes that have an ID and a name, then formatting them for the app
     return [_normalize(r) for r in data if isinstance(r, dict) and r.get("id") is not None and r.get("name")]
 
 
@@ -134,6 +141,7 @@ def find_recipes(keywords: list[str], count: int = RECIPE_COUNT,
     as soon as it has enough. Returns {"recipes", "keywords_tried",
     "keywords_used", "used_fallback"}.
     """
+    # keeping track of recipes we already found so we don't show duplicates
     recipes, seen_ids = [], set()
     tried, used = [], []
 
@@ -148,12 +156,14 @@ def find_recipes(keywords: list[str], count: int = RECIPE_COUNT,
         if added:
             used.append(keyword)
 
+    # going through the keywords until we have enough recipes
     for kw in keywords:
         if len(recipes) >= count:
             break
         if kw and kw.strip() and kw.strip().lower() not in tried:
             collect(kw.strip().lower())
 
+    # if the keywords didn't give us enough recipes, trying soup as a backup
     used_fallback = False
     if len(recipes) < count and default_keyword not in tried:
         used_fallback = True
@@ -170,6 +180,7 @@ def find_recipes(keywords: list[str], count: int = RECIPE_COUNT,
 # ---------------------------------------------------------------------------
 # Checks (RecipeAPI is mocked, so they run anywhere with no key)
 # ---------------------------------------------------------------------------
+# making fake recipes so we can test without using actual API requests
 def _recipe(n, name):
     return {"id": n, "name": name, "description": "A test recipe.", "difficulty": "easy",
             "meal_type": "soup", "cuisine": "american", "dietary_tags": [], "servings": 4,
@@ -190,6 +201,7 @@ def _list_body(recipes):
     return {"data": recipes, "links": {}, "meta": {"total": len(recipes), "language": "en"}}
 
 
+# using fake API responses to test what happens with different search results
 def _fake_api(results_by_keyword):
     """requests.get replacement: search keyword -> list of recipes (missing = empty list)."""
     def fake_get(url, params=None, headers=None, timeout=None):
@@ -205,6 +217,7 @@ def _report(ok, text):
 KEY = {"RECIPEAPI_KEY": "sk_live_test"}
 
 
+# checking that we can get four recipes without needing to try every keyword
 def check_four_recipes():
     """Weather keywords -> at least four recipes returned."""
     api = {"stew": [_recipe(i, f"Stew {i}") for i in range(1, 5)]}
@@ -215,6 +228,7 @@ def check_four_recipes():
                        f"(1 request)")
 
 
+# checking that recipes from multiple keywords can be combined
 def check_fills_from_several_keywords():
     """One keyword has fewer than 4 results -> keeps going to reach 4."""
     api = {"chili": [_recipe(1, "Chili")],
@@ -225,6 +239,7 @@ def check_fills_from_several_keywords():
     return _report(ok, f"combines keywords to reach 4: used {out['keywords_used']}")
 
 
+# making sure we try another keyword if the first one returns nothing
 def check_next_keyword():
     """First keyword returns nothing -> tries the next one."""
     api = {"chowder": [], "stew": [_recipe(i, f"Stew {i}") for i in range(1, 5)]}
@@ -235,6 +250,7 @@ def check_next_keyword():
     return _report(ok, f"skips empty first keyword: tried {out['keywords_tried']}, got {len(out['recipes'])}")
 
 
+# checking that soup is used if none of our original keywords work
 def check_default_fallback():
     """Every keyword fails -> falls back to 'soup'."""
     api = {"soup": [_recipe(i, f"Soup {i}") for i in range(1, 5)]}   # all else -> empty
@@ -244,6 +260,7 @@ def check_default_fallback():
     return _report(ok, f"falls back to default 'soup': tried {out['keywords_tried']}, got {len(out['recipes'])}")
 
 
+# seeing if the search can still continue when the API has an error
 def check_api_error_falls_back():
     """A network error or 500 on a keyword still ends in the fallback, no crash."""
     def flaky(url, params=None, headers=None, timeout=None):
@@ -258,6 +275,7 @@ def check_api_error_falls_back():
     return _report(ok, f"survives network error and 500: got {len(out['recipes'])} recipes")
 
 
+# testing whether the request gets retried after hitting the rate limit
 def check_rate_limit_retry():
     """A 429 RATE_LIMIT (10 requests/second) is retried once and then succeeds."""
     calls = []
@@ -272,6 +290,7 @@ def check_rate_limit_retry():
     return _report(ok, f"retries once after RATE_LIMIT: {len(calls)} calls, {len(out['recipes'])} recipes")
 
 
+# checking that missing or invalid API keys give us a clear error
 def check_key_problems_raise():
     """Missing key, bad key and used-up monthly limit raise a clear error (not silent 'no results')."""
     results = []
@@ -291,6 +310,7 @@ def check_key_problems_raise():
     return _report(all(results), "missing key, 401 and monthly limit each raise RecipeAPIError")
 
 
+# making sure we send the keyword and API key in the right places
 def check_request_shape():
     """Sends the key as a Bearer header and searches by name with per_page=4."""
     with patch.dict(os.environ, KEY), patch("requests.get", return_value=_response(200, _list_body([]))) as g:
@@ -301,6 +321,7 @@ def check_request_shape():
     return _report(ok, "request uses Bearer header, search=<keyword>, per_page=4")
 
 
+# checking that recipe details and ingredients are formatted how we expect
 def check_docs_response_shape():
     """A recipe shaped like the docs example normalizes correctly (steps stay a list,
     ingredient strings built from quantity + unit + name)."""
@@ -319,6 +340,7 @@ def check_docs_response_shape():
     return _report(ok, "docs-shaped recipe normalizes (steps list, ingredient strings)")
 
 
+# running all the checks together and showing whether they passed
 def run_checks() -> bool:
     results = [check_four_recipes(), check_fills_from_several_keywords(), check_next_keyword(),
                check_default_fallback(), check_api_error_falls_back(), check_rate_limit_retry(),
@@ -327,6 +349,7 @@ def run_checks() -> bool:
     return all(results)
 
 
+# printing a shortened API response so we can see what the actual data looks like
 def print_raw(keyword: str):
     """Live: print one trimmed real response so you can paste it into your write-up."""
     body = _request(keyword, 1).json()
@@ -337,6 +360,7 @@ def print_raw(keyword: str):
     print(json.dumps(body, indent=2))
 
 
+# running checks by default, or searching real recipes if keywords are provided
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args:

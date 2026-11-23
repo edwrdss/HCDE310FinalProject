@@ -10,15 +10,19 @@ def zip_to_coordinates(zip_code: str) -> dict:
     Returns: {"zip", "city", "state", "latitude", "longitude"}
     Raises:  ValueError for malformed or unknown ZIP codes.
     """
+
+    # making sure the ZIP code is actually 5 digits before trying to use it
     zip_code = str(zip_code).strip()
     if not (len(zip_code) == 5 and zip_code.isdigit()):
         raise ValueError(f"ZIP code must be 5 digits, got: {zip_code!r}")
 
+    # sending a request to the ZIP code API and checking if the location exists
     resp = requests.get(ZIP_URL.format(zip_code=zip_code), timeout=10)
     if resp.status_code == 404:
         raise ValueError(f"Unknown ZIP code: {zip_code}")
     resp.raise_for_status()
 
+    # getting the location information from the JSON response and returning it as a dictionary we can use for the weather API
     data = resp.json()
     place = data["places"][0]
     return {
@@ -36,11 +40,15 @@ def _close(actual: float, expected: float, tol: float = 0.05) -> bool:
 
 
 def run_checks():
+
+    # testing two different ZIP codes to make sure we're getting coordinates that are close to what we expect
     checks = [
         # (zip, expected_lat, expected_lon)
         ("94611", 37.83191, -122.21592),   # Oakland, CA
         ("98105", 47.6615, -122.2811),     # Seattle, WA
     ]
+
+    # going through each ZIP code and printing PASS or FAIL depending on whether the coordinates are close enough
     for zip_code, exp_lat, exp_lon in checks:
         result = zip_to_coordinates(zip_code)
         ok = _close(result["latitude"], exp_lat) and _close(result["longitude"], exp_lon)
